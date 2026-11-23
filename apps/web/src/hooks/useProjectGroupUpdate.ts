@@ -6,6 +6,7 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { getProjectOrderKey } from "@t3tools/client-runtime/state/project-grouping";
 import { AsyncResult } from "effect/reactivity";
 import * as Cause from "effect/Cause";
@@ -15,7 +16,7 @@ import { appendToManualProjectOrder } from "../components/Sidebar.logic";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { m } from "../i18n/messages";
 import type { SidebarProjectGroupMember } from "../sidebarProjectGrouping";
-import { readProjects, useProjects, useServerConfigs } from "../state/entities";
+import { readProject, readProjects, useProjects, useServerConfigs } from "../state/entities";
 import { readEnvironment } from "../state/environments";
 import { projectEnvironment } from "../state/projects";
 import { readEnvironmentScope, useEnvironmentsWithScope } from "../state/session";
@@ -154,15 +155,12 @@ export function useProjectPin() {
  */
 function appendPinChangeToManualOrder(members: ReadonlyArray<ProjectGroupMember>) {
   if (getClientSettings().sidebarProjectSortOrder !== "manual") return;
-  const projects = readProjects();
   const keys = members.flatMap((member) => {
-    const project = projects.find(
-      (candidate) => candidate.environmentId === member.environmentId && candidate.id === member.id,
-    );
-    return project === undefined ? [] : [getProjectOrderKey(project)];
+    const project = readProject(scopeProjectRef(member.environmentId, member.id));
+    return project === null ? [] : [getProjectOrderKey(project)];
   });
   const { projectOrder, setProjectOrder } = useUiStateStore.getState();
-  setProjectOrder(appendToManualProjectOrder(projects, projectOrder, keys));
+  setProjectOrder(appendToManualProjectOrder(readProjects(), projectOrder, keys));
 }
 
 /** Reports the first member this connection cannot change, and returns that failure. */

@@ -2,6 +2,7 @@ import { useRef, useState, type DragEvent } from "react";
 
 import {
   canPlaceProjectFolder,
+  type OrderedProjectFolder,
   type ProjectFolderPlacement,
   resolveProjectFolderNeighbours,
 } from "../Sidebar.logic";
@@ -12,12 +13,6 @@ const PROJECT_FOLDER_DRAG_TYPE = "application/x-t3code-project-folder";
 // Folders sit 8px apart (mt-2); the line goes in the middle of that gap.
 const DROP_LINE_OFFSET_PX = 4;
 
-interface DraggableProjectFolder {
-  readonly projectKey: string;
-  readonly pinned: boolean;
-  readonly archived: boolean;
-}
-
 interface ProjectFolderDrop {
   readonly targetKey: string;
   readonly placement: ProjectFolderPlacement;
@@ -25,16 +20,23 @@ interface ProjectFolderDrop {
   readonly top: number;
 }
 
-/** A folder's header and the thread rows it shows, as one vertical span. */
-function measureFolderBlock(list: HTMLElement, projectKey: string) {
-  const rowId = CSS.escape(sidebarFolderRowId(projectKey));
-  const header = list.querySelector<HTMLElement>(`[data-sidebar-row="${rowId}"]`);
-  if (header === null) return null;
-  const rows = list.querySelectorAll<HTMLElement>(`[data-sidebar-parent="${rowId}"]`);
-  const top = header.getBoundingClientRect().top;
-  let bottom = header.getBoundingClientRect().bottom;
-  for (const row of rows) bottom = Math.max(bottom, row.getBoundingClientRect().bottom);
-  return { top, bottom };
+/** Each shown folder's header and thread rows as one vertical span, keyed by folder row id. */
+function measureFolderBlocks(list: HTMLElement) {
+  const blocks = new Map<string, { top: number; bottom: number }>();
+  for (const row of list.querySelectorAll<HTMLElement>(
+    '[data-sidebar-row^="folder:"], [data-sidebar-parent^="folder:"]',
+  )) {
+    const bounds = row.getBoundingClientRect();
+    const headerId = row.dataset.sidebarRow;
+    if (headerId?.startsWith("folder:")) {
+      blocks.set(headerId, { top: bounds.top, bottom: bounds.bottom });
+      continue;
+    }
+    // A folder's thread rows follow its header in the list.
+    const block = blocks.get(row.dataset.sidebarParent ?? "");
+    if (block) block.bottom = Math.max(block.bottom, bounds.bottom);
+  }
+  return blocks;
 }
 
 /**
@@ -43,7 +45,7 @@ function measureFolderBlock(list: HTMLElement, projectKey: string) {
  * folder; its upper half drops before it and its lower half after it.
  */
 export function useProjectFolderDrag(input: {
-  readonly folders: readonly DraggableProjectFolder[];
+  readonly folders: readonly OrderedProjectFolder[];
   readonly onPlace: (
     movedKey: string,
     targetKey: string,
@@ -65,10 +67,11 @@ export function useProjectFolderDrag(input: {
   const resolveDrop = (list: HTMLElement, clientY: number): ProjectFolderDrop | null => {
     const movedKey = movedKeyRef.current;
     if (movedKey === null) return null;
+    const blocks = measureFolderBlocks(list);
     let nearest: { key: string; top: number; bottom: number; distance: number } | null = null;
     for (const folder of folders) {
-      const block = measureFolderBlock(list, folder.projectKey);
-      if (block === null) continue;
+      const block = blocks.get(sidebarFolderRowId(folder.projectKey));
+      if (block === undefined) continue;
       const distance =
         clientY < block.top ? block.top - clientY : Math.max(0, clientY - block.bottom);
       if (nearest === null || distance < nearest.distance) {

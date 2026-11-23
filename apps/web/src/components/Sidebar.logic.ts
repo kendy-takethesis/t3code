@@ -927,7 +927,7 @@ export function appendToManualProjectOrder(
 
 export type ProjectFolderPlacement = "before" | "after";
 
-interface OrderedProjectFolder {
+export interface OrderedProjectFolder {
   readonly projectKey: string;
   readonly pinned: boolean;
   readonly archived: boolean;

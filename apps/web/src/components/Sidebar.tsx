@@ -1103,6 +1103,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   // loaded. The stored keys are left alone, so the scope returns with its project.
   // An archived project's scope reads as all projects, matching the menu.
   const scopeGroups = pickableProjectGroups(projectGroups);
+  // An archived project keeps a folder for its active threads, below the rest.
+  const orderedProjectGroups = [
+    ...scopeGroups,
+    ...projectGroups.filter((project) => project.archived),
+  ];
   const archivedProjectKeys = new Set(
     projectGroups.filter((project) => project.archived).map((project) => project.projectKey),
   );
@@ -1331,8 +1336,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     departingThreadKey,
     folderGroups: boringSidebarEnabled
       ? scopedProjectGroups.length === 0
-        ? // An archived project keeps a folder for its active threads, below the rest.
-          [...scopeGroups, ...projectGroups.filter((project) => project.archived)]
+        ? orderedProjectGroups
         : scopedProjectGroups
       : null,
     keepEmptyFolders: (group) =>
@@ -1344,20 +1348,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const placeProjectFolder = useStableCallback(
     (movedKey: string, targetKey: string, placement: ProjectFolderPlacement) => {
       setProjectOrder(
-        placeProjectGroupInOrder(
-          [...scopeGroups, ...projectGroups.filter((project) => project.archived)],
-          movedKey,
-          targetKey,
-          placement,
-        ),
+        placeProjectGroupInOrder(orderedProjectGroups, movedKey, targetKey, placement),
       );
       if (getClientSettings().sidebarProjectSortOrder !== "manual") {
         void updateClientSettings({ sidebarProjectSortOrder: "manual" });
       }
     },
   );
+  const shownFolderGroups = projectFolders?.map((folder) => folder.group) ?? EMPTY_PROJECT_GROUPS;
   const folderDrag = useProjectFolderDrag({
-    folders: projectFolders?.map((folder) => folder.group) ?? EMPTY_PROJECT_GROUPS,
+    folders: shownFolderGroups,
     onPlace: placeProjectFolder,
   });
   const handleProjectFolderContextMenu = useStableCallback(
@@ -1368,10 +1368,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     ) => {
       const api = readLocalApi();
       if (!api) return;
-      const neighbours = resolveProjectFolderNeighbours(
-        projectFolders?.map((folder) => folder.group) ?? [],
-        group.projectKey,
-      );
+      const neighbours = resolveProjectFolderNeighbours(shownFolderGroups, group.projectKey);
       void (async () => {
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
