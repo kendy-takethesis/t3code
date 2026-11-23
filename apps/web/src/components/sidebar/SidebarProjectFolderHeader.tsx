@@ -3,7 +3,7 @@ import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environ
 import type { ContextMenuSource } from "@t3tools/contracts";
 import { ChevronDownIcon, SquarePenIcon } from "lucide-react";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
-import { memo } from "react";
+import { memo, type DragEvent } from "react";
 
 import { cn } from "~/lib/utils";
 import { contextMenuSourceOf } from "../../contextMenuSource";
@@ -42,6 +42,7 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
   group: SidebarProjectSnapshot;
   collapsed: boolean;
   hiddenThreads: readonly EnvironmentThreadShell[];
+  dragging: boolean;
   onToggle: (group: SidebarProjectSnapshot) => void;
   onNewThread: (group: SidebarProjectSnapshot) => void;
   onContextMenu: (
@@ -49,6 +50,9 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
     position: { x: number; y: number },
     source: ContextMenuSource,
   ) => void;
+  /** Left out when the folder has nowhere to move within its pin group. */
+  onDragStart: ((projectKey: string, event: DragEvent<HTMLElement>) => void) | undefined;
+  onDragEnd: () => void;
 }) {
   const gt = useGT();
   const m = useMessages();
@@ -71,12 +75,18 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
   return (
     <li
       data-testid="sidebar-project-folder"
-      className="group/project-folder relative mt-2 list-none first:mt-0"
+      className={cn(
+        "group/project-folder relative mt-2 list-none first:mt-0",
+        props.dragging && "opacity-50",
+      )}
     >
       <button
         type="button"
         data-sidebar-row={rowId}
         aria-expanded={!collapsed}
+        draggable={props.onDragStart !== undefined}
+        onDragStart={(event) => props.onDragStart?.(group.projectKey, event)}
+        onDragEnd={props.onDragEnd}
         onClick={() => props.onToggle(group)}
         onContextMenu={(event) => {
           event.preventDefault();

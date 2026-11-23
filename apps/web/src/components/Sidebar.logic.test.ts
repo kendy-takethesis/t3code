@@ -8,7 +8,11 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import {
   ADD_PROJECT_SCOPE_ITEM_VALUE,
+  appendToManualProjectOrder,
+  canPlaceProjectFolder,
   filterSidebarProjectScopeItems,
+  placeProjectGroupInOrder,
+  resolveProjectFolderNeighbours,
   shouldCreateNewThreadInCurrentProject,
   resolveScopedNewThreadProjectRef,
   deleteSelectedThreadEntries,
@@ -901,6 +905,123 @@ describe("sortSidebarV2ProjectGroups", () => {
         (project) => project.projectKey,
       ),
     ).toEqual(["logical-newer", "logical-older"]);
+    // Manual order ignores thread activity, so newer work never reshuffles folders.
+    expect(
+      sortSidebarV2ProjectGroups(projects, threads, "manual", new Set()).map(
+        (project) => project.projectKey,
+      ),
+    ).toEqual(["logical-older", "logical-newer"]);
+  });
+});
+
+describe("project folder order", () => {
+  const group = (
+    projectKey: string,
+    options: { pinned?: boolean; archived?: boolean; members?: readonly string[] } = {},
+  ) => ({
+    projectKey,
+    pinned: options.pinned ?? false,
+    archived: options.archived ?? false,
+    memberProjects: (options.members ?? [projectKey]).map((physicalProjectKey) => ({
+      physicalProjectKey,
+    })),
+  });
+
+  it("moves a folder past its shown neighbour within its pin group", () => {
+    // Two pinned and three unpinned folders; "hidden" has no folder but keeps its saved place.
+    const groups = [
+      group("p1", { pinned: true }),
+      group("p2", { pinned: true }),
+      group("u1"),
+      group("hidden"),
+      group("u2"),
+      group("u3"),
+    ];
+    const folders = groups.filter((candidate) => candidate.projectKey !== "hidden");
+
+    expect(
+      folders.map((folder) => [
+        folder.projectKey,
+        resolveProjectFolderNeighbours(folders, folder.projectKey),
+      ]),
+    ).toEqual([
+      ["p1", { above: null, below: "p2" }],
+      ["p2", { above: "p1", below: null }],
+      ["u1", { above: null, below: "u2" }],
+      ["u2", { above: "u1", below: "u3" }],
+      ["u3", { above: "u2", below: null }],
+    ]);
+    expect(placeProjectGroupInOrder(groups, "u2", "u1", "before")).toEqual([
+      "p1",
+      "p2",
+      "u2",
+      "u1",
+      "hidden",
+      "u3",
+    ]);
+    expect(placeProjectGroupInOrder(groups, "p1", "p2", "after")).toEqual([
+      "p2",
+      "p1",
+      "u1",
+      "hidden",
+      "u2",
+      "u3",
+    ]);
+  });
+
+  it("keeps drops inside the dragged folder's pin group and skips drops that change nothing", () => {
+    const folders = [
+      group("p1", { pinned: true }),
+      group("p2", { pinned: true }),
+      group("u1"),
+      group("u2"),
+      group("old", { archived: true }),
+    ];
+
+    expect(
+      (
+        [
+          ["u2", "u1", "before"],
+          ["u1", "u2", "after"],
+          ["p2", "p1", "before"],
+          ["u1", "p2", "after"],
+          ["p2", "u1", "before"],
+          ["u1", "u2", "before"],
+          ["u2", "u1", "after"],
+          ["u1", "u1", "before"],
+          ["old", "u2", "before"],
+          ["u2", "old", "before"],
+        ] as const
+      ).map(([moved, target, placement]) =>
+        canPlaceProjectFolder(folders, moved, target, placement),
+      ),
+    ).toEqual([true, true, true, false, false, false, false, false, false, false]);
+    // An archived folder stays below the rest, so it is nobody's neighbour.
+    expect(resolveProjectFolderNeighbours(folders, "u2")).toEqual({ above: "u1", below: null });
+    expect(resolveProjectFolderNeighbours(folders, "old")).toEqual({ above: null, below: null });
+  });
+
+  it("moves every checkout of a grouped project together", () => {
+    const groups = [group("a", { members: ["local:a", "remote:a"] }), group("b"), group("c")];
+
+    expect(placeProjectGroupInOrder(groups, "a", "c", "after")).toEqual([
+      "b",
+      "c",
+      "local:a",
+      "remote:a",
+    ]);
+  });
+
+  it("appends a project whose pin changed after the projects already in manual order", () => {
+    const [a, b, c] = ["a", "b", "c"].map((name) =>
+      makeProject({ id: ProjectId.make(name), title: name, workspaceRoot: `/work/${name}` }),
+    );
+    const key = (project: Project) => `${localEnvironmentId}:/work/${project.title}`;
+
+    // c and a are saved; b was added later; "gone" was removed.
+    expect(appendToManualProjectOrder([a!, b!, c!], [key(c!), "gone", key(a!)], [key(a!)])).toEqual(
+      [key(c!), key(b!), key(a!)],
+    );
   });
 });
 
