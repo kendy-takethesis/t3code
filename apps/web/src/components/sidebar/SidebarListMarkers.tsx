@@ -88,25 +88,40 @@ export function SidebarDragBoundary(props: {
       className="pointer-events-none relative mx-0.5 -mb-px h-0"
     >
       {props.visible ? (
-        <div className="sidebar-drag-boundary-label absolute inset-x-2 top-1 flex h-4 items-center gap-2">
-          <span
-            className={cn(
-              "shrink-0 text-xs font-medium",
-              props.isDropTarget ? "text-primary" : "text-sidebar-foreground/80",
-            )}
-          >
-            {props.label}
-          </span>
-          <span
-            aria-hidden
-            className={cn(
-              "h-px flex-1",
-              props.isDropTarget ? "bg-primary/50" : "bg-sidebar-foreground/25",
-            )}
-          />
-        </div>
+        <SidebarBoundaryLabel
+          className="sidebar-drag-boundary-label absolute inset-x-2 top-1"
+          label={props.label}
+          highlighted={props.isDropTarget}
+        />
       ) : null}
     </SortableSidebarMarker>
+  );
+}
+
+/** A drag-time section label: the name, then a hairline to the edge. */
+export function SidebarBoundaryLabel(props: {
+  label: string;
+  highlighted: boolean;
+  className?: string;
+}) {
+  return (
+    <div className={cn("flex h-4 items-center gap-2", props.className)}>
+      <span
+        className={cn(
+          "shrink-0 text-xs font-medium",
+          props.highlighted ? "text-primary" : "text-sidebar-foreground/80",
+        )}
+      >
+        {props.label}
+      </span>
+      <span
+        aria-hidden
+        className={cn(
+          "h-px flex-1",
+          props.highlighted ? "bg-primary/50" : "bg-sidebar-foreground/25",
+        )}
+      />
+    </div>
   );
 }
 

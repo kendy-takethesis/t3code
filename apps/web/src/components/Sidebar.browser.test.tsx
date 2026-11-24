@@ -594,15 +594,17 @@ describe("sidebar project folder order", () => {
   const folderHeader = (container: HTMLElement, name: string) =>
     folders(container).find((folder) => folder.name === name)!.header;
   // Dispatches the browser's drag sequence with a pointer at the top or bottom edge of the target.
+  // The target is measured after the drag starts, once the group labels have opened their space.
   const dragFolder = async (from: HTMLElement, to: HTMLElement, edge: "top" | "bottom") => {
     const dataTransfer = new DataTransfer();
-    const bounds = to.getBoundingClientRect();
-    const clientY = edge === "top" ? bounds.top + 1 : bounds.bottom - 1;
+    let clientY = 0;
     const fire = (element: HTMLElement, type: string) =>
       element.dispatchEvent(
         new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer, clientY }),
       );
     await act(() => fire(from, "dragstart"));
+    const bounds = to.getBoundingClientRect();
+    clientY = edge === "top" ? bounds.top + 1 : bounds.bottom - 1;
     await act(() => fire(to, "dragover"));
     await act(() => fire(to, "drop"));
     await act(() => fire(from, "dragend"));
@@ -673,6 +675,21 @@ describe("sidebar project folder order", () => {
     expect(folderNames(screen.container)).toEqual(["p2", "p1", "u1", "u3", "u2"]);
     expect(getClientSettings().sidebarProjectSortOrder).toBe("manual");
     expect(useUiStateStore.getState().projectOrder).toEqual(keysOf(["p2", "p1", "u1", "u3", "u2"]));
+
+    // While a folder drags, both pin groups are labelled so the boundary it cannot cross shows.
+    const held = new DataTransfer();
+    const heldHeader = folderHeader(screen.container, "u2");
+    const fireHeld = (type: string) =>
+      heldHeader.dispatchEvent(new DragEvent(type, { bubbles: true, dataTransfer: held }));
+    await act(() => fireHeld("dragstart"));
+    await expect
+      .element(screen.getByTestId("sidebar-folder-group-pinned"))
+      .toHaveTextContent("Pinned");
+    await expect
+      .element(screen.getByTestId("sidebar-folder-group-unpinned"))
+      .toHaveTextContent("Projects");
+    await act(() => fireHeld("dragend"));
+    expect(screen.container.querySelector('[data-testid^="sidebar-folder-group-"]')).toBeNull();
 
     // Dragging never changes pin state, so a drop on the other group does nothing.
     await dragFolder(

@@ -288,6 +288,7 @@ import {
 } from "./sidebar/SidebarProjectFolderHeader";
 import { useProjectFolderDrag } from "./sidebar/useProjectFolderDrag";
 import {
+  SidebarBoundaryLabel,
   SidebarDragBoundary,
   SidebarSectionHeader,
   SidebarSectionPlaceholder,
@@ -1360,6 +1361,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     folders: shownFolderGroups,
     onPlace: placeProjectFolder,
   });
+  const draggedFolderGroup =
+    shownFolderGroups.find((group) => group.projectKey === folderDrag.draggingKey) ?? null;
+  const toggleFolderPin = useStableCallback((group: SidebarProjectSnapshot) =>
+    toggleProjectGroupPin(group),
+  );
   const handleProjectFolderContextMenu = useStableCallback(
     (
       group: SidebarProjectSnapshot,
@@ -3680,7 +3686,35 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           continue;
                         }
                         if (projectFolders !== null && item.marker === "active-placeholder") {
+                          let previousFolderPinned: boolean | null = null;
                           for (const folder of projectFolders) {
+                            const { pinned, archived } = folder.group;
+                            // A dragged folder stays in its pin group, so both groups are named while it moves.
+                            if (
+                              draggedFolderGroup !== null &&
+                              !archived &&
+                              pinned !== previousFolderPinned
+                            ) {
+                              const groupName = pinned ? "pinned" : "unpinned";
+                              items.push(
+                                <li
+                                  key={`folder-group:${groupName}`}
+                                  aria-hidden
+                                  data-testid={`sidebar-folder-group-${groupName}`}
+                                  className="list-none px-2 pt-2"
+                                >
+                                  <SidebarBoundaryLabel
+                                    label={
+                                      pinned
+                                        ? gt("Pinned", { $context: "sidebar section" })
+                                        : gt("Projects")
+                                    }
+                                    highlighted={pinned === draggedFolderGroup.pinned}
+                                  />
+                                </li>,
+                              );
+                            }
+                            previousFolderPinned = archived ? previousFolderPinned : pinned;
                             items.push(
                               <SidebarProjectFolderHeader
                                 key={`project-folder:${folder.group.projectKey}`}
@@ -3688,7 +3722,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 collapsed={folder.collapsed}
                                 hiddenThreads={folder.hiddenThreads}
                                 dragging={folderDrag.draggingKey === folder.group.projectKey}
+                                dimmed={
+                                  draggedFolderGroup !== null &&
+                                  (archived || pinned !== draggedFolderGroup.pinned)
+                                }
                                 onToggle={toggleProjectFolder}
+                                onTogglePin={
+                                  canPinProject(folder.group) ? toggleFolderPin : undefined
+                                }
                                 onNewThread={startThreadInProjectFolder}
                                 onContextMenu={handleProjectFolderContextMenu}
                                 onDragStart={
