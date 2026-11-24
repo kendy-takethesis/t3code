@@ -4,11 +4,11 @@ import {
   canPlaceProjectFolder,
   type OrderedProjectFolder,
   type ProjectFolderPlacement,
-  resolveProjectFolderNeighbours,
 } from "../Sidebar.logic";
 import { sidebarFolderRowId } from "./SidebarProjectFolderHeader";
 
 // A private type keeps the composer, file drops and other apps from accepting folder drags.
+// The drop side checks the dragged key instead, since some drag paths drop custom types.
 const PROJECT_FOLDER_DRAG_TYPE = "application/x-t3code-project-folder";
 // Folders sit 8px apart (mt-2); the line goes in the middle of that gap.
 const DROP_LINE_OFFSET_PX = 4;
@@ -95,21 +95,23 @@ export function useProjectFolderDrag(input: {
   return {
     draggingKey,
     dropLineTop: drop?.top ?? null,
-    /** Whether the folder has a neighbour in its pin group to move past. */
-    canDrag: (projectKey: string) => {
-      const { above, below } = resolveProjectFolderNeighbours(folders, projectKey);
-      return above !== null || below !== null;
-    },
+    /** Archived folders stay below the rest. A folder alone in its group still drags, so the labels show why it cannot move. */
+    canDrag: (projectKey: string) =>
+      folders.some((folder) => folder.projectKey === projectKey && !folder.archived),
     onFolderDragStart: (projectKey: string, event: DragEvent<HTMLElement>) => {
       event.dataTransfer.setData(PROJECT_FOLDER_DRAG_TYPE, projectKey);
       event.dataTransfer.effectAllowed = "move";
       movedKeyRef.current = projectKey;
-      setDraggingKey(projectKey);
+      // Chromium cancels a native drag whose source moves while dragstart runs, and the
+      // group labels shift the list, so they appear once the drag has begun.
+      requestAnimationFrame(() => {
+        if (movedKeyRef.current === projectKey) setDraggingKey(projectKey);
+      });
     },
     onFolderDragEnd: finish,
     listDropProps: {
       onDragOver: (event: DragEvent<HTMLElement>) => {
-        if (!event.dataTransfer.types.includes(PROJECT_FOLDER_DRAG_TYPE)) return;
+        if (movedKeyRef.current === null) return;
         const next = resolveDrop(event.currentTarget, event.clientY);
         if (next !== null) {
           event.preventDefault();
@@ -129,14 +131,12 @@ export function useProjectFolderDrag(input: {
         setDrop(null);
       },
       onDrop: (event: DragEvent<HTMLElement>) => {
-        if (!event.dataTransfer.types.includes(PROJECT_FOLDER_DRAG_TYPE)) return;
-        event.preventDefault();
         const movedKey = movedKeyRef.current;
+        if (movedKey === null) return;
+        event.preventDefault();
         const placed = resolveDrop(event.currentTarget, event.clientY);
         finish();
-        if (movedKey !== null && placed !== null) {
-          onPlace(movedKey, placed.targetKey, placed.placement);
-        }
+        if (placed !== null) onPlace(movedKey, placed.targetKey, placed.placement);
       },
     },
   };

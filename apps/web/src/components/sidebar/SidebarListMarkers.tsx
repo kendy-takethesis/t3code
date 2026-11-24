@@ -103,9 +103,14 @@ export function SidebarBoundaryLabel(props: {
   label: string;
   highlighted: boolean;
   className?: string;
+  "data-testid"?: string;
 }) {
   return (
-    <div className={cn("flex h-4 items-center gap-2", props.className)}>
+    <div
+      aria-hidden
+      data-testid={props["data-testid"]}
+      className={cn("flex h-4 items-center gap-2", props.className)}
+    >
       <span
         className={cn(
           "shrink-0 text-xs font-medium",

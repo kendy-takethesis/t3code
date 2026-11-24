@@ -603,6 +603,11 @@ describe("sidebar project folder order", () => {
         new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer, clientY }),
       );
     await act(() => fire(from, "dragstart"));
+    await vi.waitFor(() =>
+      expect(
+        from.ownerDocument.querySelector('[data-testid^="sidebar-folder-group-"]'),
+      ).not.toBeNull(),
+    );
     const bounds = to.getBoundingClientRect();
     clientY = edge === "top" ? bounds.top + 1 : bounds.bottom - 1;
     await act(() => fire(to, "dragover"));
@@ -612,6 +617,11 @@ describe("sidebar project folder order", () => {
 
   it("moves folders within their pin group by drag and keyboard menu, starting Manual from the shown order", async () => {
     using stack = new DisposableStack();
+    // Drops are placed from real row geometry, and the group labels must not move rows.
+    const style = document.createElement("style");
+    style.textContent = appCss;
+    document.head.append(style);
+    stack.defer(() => style.remove());
     const previousSettings = getClientSettings();
     stack.defer(() => __setClientSettingsForTests(previousSettings));
     const previousOrder = useUiStateStore.getState().projectOrder;
@@ -666,13 +676,16 @@ describe("sidebar project folder order", () => {
       );
     expect(folderNames(screen.container)).toEqual(["p2", "p1", "u3", "u2", "u1"]);
 
-    // The first move saves the shown order with that one move applied, and selects Manual.
-    await dragFolder(
+    // The first move saves the shown order with that one move applied, and selects Manual. It is
+    // a real pointer drag: Chromium cancels a native drag whose source moves during dragstart.
+    await userEvent.dragAndDrop(
       folderHeader(screen.container, "u1"),
       folderHeader(screen.container, "u3"),
-      "top",
+      { targetPosition: { x: 40, y: 2 } },
     );
-    expect(folderNames(screen.container)).toEqual(["p2", "p1", "u1", "u3", "u2"]);
+    await vi.waitFor(() =>
+      expect(folderNames(screen.container)).toEqual(["p2", "p1", "u1", "u3", "u2"]),
+    );
     expect(getClientSettings().sidebarProjectSortOrder).toBe("manual");
     expect(useUiStateStore.getState().projectOrder).toEqual(keysOf(["p2", "p1", "u1", "u3", "u2"]));
 

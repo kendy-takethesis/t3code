@@ -12,6 +12,7 @@ import { useUiStateStore } from "../../uiStateStore";
 import { resolveSidebarFolderDot, resolveThreadLastVisitedAt } from "../Sidebar.logic";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Button } from "../ui/button";
+import { SidebarBoundaryLabel } from "./SidebarListMarkers";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 const FOLDER_DOT_CLASS_NAME = {
@@ -47,6 +48,8 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
   collapsed: boolean;
   hiddenThreads: readonly EnvironmentThreadShell[];
   dragging: boolean;
+  /** Names the pin group this folder starts while a folder drags; null otherwise. */
+  groupLabel: { readonly label: string; readonly highlighted: boolean } | null;
   /** Set while another pin group's folder drags, since this folder cannot take the drop. */
   dimmed: boolean;
   onToggle: (group: SidebarProjectSnapshot) => void;
@@ -88,6 +91,15 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
         (props.dragging || props.dimmed) && "opacity-50",
       )}
     >
+      {/* Drawn over the gap above the folder, so the list does not move when a drag starts. */}
+      {props.groupLabel ? (
+        <SidebarBoundaryLabel
+          data-testid={`sidebar-folder-group-${group.pinned ? "pinned" : "unpinned"}`}
+          className="pointer-events-none absolute inset-x-2 -top-3 z-10"
+          label={props.groupLabel.label}
+          highlighted={props.groupLabel.highlighted}
+        />
+      ) : null}
       <button
         type="button"
         data-sidebar-row={rowId}
