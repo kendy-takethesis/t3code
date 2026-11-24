@@ -163,6 +163,14 @@ Pinned threads stay above the folders, and Snoozed and Settled stay below them. 
 can drag a thread onto the composer to mention it, but not within the sidebar, and the Working
 section is off. Each device keeps its own choice.
 
+Drag a folder to reorder it, or open its menu (right-click or **Shift+F10**) and choose **Move up**
+or **Move down**. Pinned folders show a pin; hover any folder to pin or unpin it. Folders move
+within the pinned or unpinned group, which are labelled while you drag. Your first move switches
+**Settings → General → Project order** to **Manual**, starting from the order you see, and thread
+activity no longer reorders folders. In Manual order, **Pin project** and **Unpin project** put a
+project last in its new group, and new projects start at the end. Pick another order in Settings to
+sort by activity again. The order is saved on this device.
+
 ## Settle finished work
 
 Choose **Settle thread** from its menu to move finished work out of the active list

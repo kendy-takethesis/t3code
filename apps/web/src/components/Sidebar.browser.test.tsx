@@ -1,6 +1,7 @@
 import appCss from "../index.css?inline";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { getProjectOrderKey } from "@t3tools/client-runtime/state/project-grouping";
 import * as shelfHooks from "../state/olderSettledShelf";
 import { createWorkspaceFocusController, workspaceAreaProps } from "../lib/workspaceFocus";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -31,6 +32,7 @@ import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { readLocalApi } from "../localApi";
 import type { Project } from "../types";
+import { useUiStateStore } from "../uiStateStore";
 import Sidebar from "./Sidebar";
 import { THREAD_JUMP_HINT_SHOW_DELAY_MS } from "./Sidebar.logic";
 import { SortableThreadRow } from "./sidebar/SidebarThreadRow";
@@ -572,5 +574,160 @@ describe("sidebar settled pagination", () => {
     const loadedRows = screen.container.querySelectorAll("[data-thread-item]").length;
     await act(() => moreButton.click());
     expect(screen.container.querySelectorAll("[data-thread-item]")).toHaveLength(loadedRows);
+  });
+});
+
+describe("sidebar project folder order", () => {
+  // Each folder names its project in its New thread button.
+  const folders = (container: HTMLElement) =>
+    Array.from(
+      container.querySelectorAll<HTMLElement>('[data-testid="sidebar-project-folder"]'),
+      (folder) => ({
+        name: folder
+          .querySelector("[data-sidebar-action-for]")
+          ?.getAttribute("aria-label")
+          ?.replace("New thread in ", ""),
+        header: folder.querySelector<HTMLElement>("button[data-sidebar-row]")!,
+      }),
+    );
+  const folderNames = (container: HTMLElement) => folders(container).map((folder) => folder.name);
+  const folderHeader = (container: HTMLElement, name: string) =>
+    folders(container).find((folder) => folder.name === name)!.header;
+  // Dispatches the browser's drag sequence with a pointer at the top or bottom edge of the target.
+  // The target is measured after the drag starts, once the group labels have opened their space.
+  const dragFolder = async (from: HTMLElement, to: HTMLElement, edge: "top" | "bottom") => {
+    const dataTransfer = new DataTransfer();
+    let clientY = 0;
+    const fire = (element: HTMLElement, type: string) =>
+      element.dispatchEvent(
+        new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer, clientY }),
+      );
+    await act(() => fire(from, "dragstart"));
+    await vi.waitFor(() =>
+      expect(
+        from.ownerDocument.querySelector('[data-testid^="sidebar-folder-group-"]'),
+      ).not.toBeNull(),
+    );
+    const bounds = to.getBoundingClientRect();
+    clientY = edge === "top" ? bounds.top + 1 : bounds.bottom - 1;
+    await act(() => fire(to, "dragover"));
+    await act(() => fire(to, "drop"));
+    await act(() => fire(from, "dragend"));
+  };
+
+  it("moves folders within their pin group by drag and keyboard menu, starting Manual from the shown order", async () => {
+    using stack = new DisposableStack();
+    // Drops are placed from real row geometry, and the group labels must not move rows.
+    const style = document.createElement("style");
+    style.textContent = appCss;
+    document.head.append(style);
+    stack.defer(() => style.remove());
+    const previousSettings = getClientSettings();
+    stack.defer(() => __setClientSettingsForTests(previousSettings));
+    const previousOrder = useUiStateStore.getState().projectOrder;
+    stack.defer(() => useUiStateStore.getState().setProjectOrder(previousOrder));
+    __setClientSettingsForTests({
+      ...DEFAULT_CLIENT_SETTINGS,
+      boringSidebarEnabled: true,
+      sidebarProjectSortOrder: "updated_at",
+    });
+    const pinnedAt = "2026-01-01T00:00:00.000Z";
+    const projects = [
+      { ...project("p1"), pinnedAt },
+      { ...project("p2"), pinnedAt },
+      project("u1"),
+      project("u2"),
+      project("u3"),
+    ];
+    // Newer activity sorts first: p2 above p1, then u3, u2, u1.
+    const threads = projects.map((candidate, index) =>
+      makeThreadFixture({
+        environmentId: candidate.environmentId,
+        id: ThreadId.make(`thread-${candidate.id}`),
+        projectId: candidate.id,
+        title: `Thread ${candidate.id}`,
+        updatedAt: `2026-01-01T00:00:0${index}.000Z`,
+      }),
+    );
+    const show = vi.fn().mockResolvedValue(null);
+    vi.mocked(readLocalApi).mockReturnValue({ contextMenu: { show } } as unknown as LocalApi);
+    vi.mocked(useProjects).mockReturnValue(projects);
+    vi.mocked(useQuietThreadShells).mockReturnValue(threads);
+    vi.mocked(useServerConfigs).mockReturnValue(new Map());
+    vi.mocked(useThreadRouteTarget).mockReturnValue(null);
+    vi.mocked(useHandleNewThread).mockReturnValue({
+      activeDraftThread: null,
+      activeThread: null,
+      defaultProjectRef: { environmentId: projects[0]!.environmentId, projectId: projects[0]!.id },
+      defaultProjectFallbackReady: true,
+      handleNewThread: vi.fn().mockResolvedValue(null),
+      routeDraftId: null,
+      routeThreadRef: null,
+    });
+    await using screen = await render(
+      <SidebarProvider>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>,
+    );
+    await expect.element(screen.getByText("Thread u1")).toBeInTheDocument();
+    const keysOf = (names: readonly string[]) =>
+      names.map((name) =>
+        getProjectOrderKey(projects.find((candidate) => candidate.title === name)!),
+      );
+    expect(folderNames(screen.container)).toEqual(["p2", "p1", "u3", "u2", "u1"]);
+
+    // The first move saves the shown order with that one move applied, and selects Manual. It is
+    // a real pointer drag: Chromium cancels a native drag whose source moves during dragstart.
+    await userEvent.dragAndDrop(
+      folderHeader(screen.container, "u1"),
+      folderHeader(screen.container, "u3"),
+      { targetPosition: { x: 40, y: 2 } },
+    );
+    await vi.waitFor(() =>
+      expect(folderNames(screen.container)).toEqual(["p2", "p1", "u1", "u3", "u2"]),
+    );
+    expect(getClientSettings().sidebarProjectSortOrder).toBe("manual");
+    expect(useUiStateStore.getState().projectOrder).toEqual(keysOf(["p2", "p1", "u1", "u3", "u2"]));
+
+    // While a folder drags, both pin groups are labelled so the boundary it cannot cross shows.
+    const held = new DataTransfer();
+    const heldHeader = folderHeader(screen.container, "u2");
+    const fireHeld = (type: string) =>
+      heldHeader.dispatchEvent(new DragEvent(type, { bubbles: true, dataTransfer: held }));
+    await act(() => fireHeld("dragstart"));
+    await expect
+      .element(screen.getByTestId("sidebar-folder-group-pinned"))
+      .toHaveTextContent("Pinned");
+    await expect
+      .element(screen.getByTestId("sidebar-folder-group-unpinned"))
+      .toHaveTextContent("Projects");
+    await act(() => fireHeld("dragend"));
+    expect(screen.container.querySelector('[data-testid^="sidebar-folder-group-"]')).toBeNull();
+
+    // Dragging never changes pin state, so a drop on the other group does nothing.
+    await dragFolder(
+      folderHeader(screen.container, "u2"),
+      folderHeader(screen.container, "p1"),
+      "top",
+    );
+    expect(folderNames(screen.container)).toEqual(["p2", "p1", "u1", "u3", "u2"]);
+
+    show.mockResolvedValueOnce("move-up");
+    const lastPinned = folderHeader(screen.container, "p1");
+    lastPinned.focus();
+    await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+    await vi.waitFor(() => expect(show).toHaveBeenCalledTimes(1));
+    expect(
+      (show.mock.lastCall![0] as ReadonlyArray<{ id: string; disabled?: boolean }>)
+        .filter((item) => item.id.startsWith("move-"))
+        .map((item) => [item.id, item.disabled ?? false]),
+    ).toEqual([
+      ["move-up", false],
+      ["move-down", true],
+    ]);
+    await vi.waitFor(() =>
+      expect(folderNames(screen.container)).toEqual(["p1", "p2", "u1", "u3", "u2"]),
+    );
+    expect(useUiStateStore.getState().projectOrder).toEqual(keysOf(["p1", "p2", "u1", "u3", "u2"]));
   });
 });

@@ -912,7 +912,12 @@ export function GeneralSettingsPanel() {
         />
         <SettingsRow
           {...setting("project-order")}
-          description={<T>Order of projects in the sidebar project picker and command palette.</T>}
+          description={
+            <T>
+              Order of projects in the sidebar, project picker, and command palette. Moving a
+              project folder switches to Manual.
+            </T>
+          }
           resetAction={
             settings.sidebarProjectSortOrder !==
             DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder ? (

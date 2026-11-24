@@ -1,9 +1,9 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { ContextMenuSource } from "@t3tools/contracts";
-import { ChevronDownIcon, SquarePenIcon } from "lucide-react";
+import { ChevronDownIcon, PinIcon, PinOffIcon, SquarePenIcon } from "lucide-react";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
-import { memo } from "react";
+import { memo, type DragEvent } from "react";
 
 import { cn } from "~/lib/utils";
 import { contextMenuSourceOf } from "../../contextMenuSource";
@@ -12,6 +12,7 @@ import { useUiStateStore } from "../../uiStateStore";
 import { resolveSidebarFolderDot, resolveThreadLastVisitedAt } from "../Sidebar.logic";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Button } from "../ui/button";
+import { SidebarBoundaryLabel } from "./SidebarListMarkers";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 const FOLDER_DOT_CLASS_NAME = {
@@ -28,6 +29,10 @@ const FOLDER_DOT_LABEL = {
   working: msg(", working", { $context: "project folder status, read after its name" }),
 } as const;
 
+// Trailing marks give way to the hover actions drawn over them.
+const HIDDEN_UNDER_ACTIONS =
+  "group-hover/project-folder:invisible group-has-[[data-sidebar-action-for]:focus]/project-folder:invisible pointer-coarse:invisible";
+
 /** The folder's sidebar tree row; its thread rows name it as their parent. */
 export function sidebarFolderRowId(projectKey: string) {
   return `folder:${projectKey}`;
@@ -42,13 +47,23 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
   group: SidebarProjectSnapshot;
   collapsed: boolean;
   hiddenThreads: readonly EnvironmentThreadShell[];
+  dragging: boolean;
+  /** Names the pin group this folder starts while a folder drags; null otherwise. */
+  groupLabel: { readonly label: string; readonly highlighted: boolean } | null;
+  /** Set while another pin group's folder drags, since this folder cannot take the drop. */
+  dimmed: boolean;
   onToggle: (group: SidebarProjectSnapshot) => void;
+  /** Left out when this connection cannot pin the project. */
+  onTogglePin: ((group: SidebarProjectSnapshot) => void) | undefined;
   onNewThread: (group: SidebarProjectSnapshot) => void;
   onContextMenu: (
     group: SidebarProjectSnapshot,
     position: { x: number; y: number },
     source: ContextMenuSource,
   ) => void;
+  /** Left out when the folder has nowhere to move within its pin group. */
+  onDragStart: ((projectKey: string, event: DragEvent<HTMLElement>) => void) | undefined;
+  onDragEnd: () => void;
 }) {
   const gt = useGT();
   const m = useMessages();
@@ -71,12 +86,27 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
   return (
     <li
       data-testid="sidebar-project-folder"
-      className="group/project-folder relative mt-2 list-none first:mt-0"
+      className={cn(
+        "group/project-folder relative mt-2 list-none first:mt-0",
+        (props.dragging || props.dimmed) && "opacity-50",
+      )}
     >
+      {/* Drawn over the gap above the folder, so the list does not move when a drag starts. */}
+      {props.groupLabel ? (
+        <SidebarBoundaryLabel
+          data-testid={`sidebar-folder-group-${group.pinned ? "pinned" : "unpinned"}`}
+          className="pointer-events-none absolute inset-x-2 -top-3 z-10"
+          label={props.groupLabel.label}
+          highlighted={props.groupLabel.highlighted}
+        />
+      ) : null}
       <button
         type="button"
         data-sidebar-row={rowId}
         aria-expanded={!collapsed}
+        draggable={props.onDragStart !== undefined}
+        onDragStart={(event) => props.onDragStart?.(group.projectKey, event)}
+        onDragEnd={props.onDragEnd}
         onClick={() => props.onToggle(group)}
         onContextMenu={(event) => {
           event.preventDefault();
@@ -98,9 +128,25 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
           </span>
         ) : null}
         {collapsed && hiddenThreads.length > 0 ? (
-          <span className="shrink-0 text-xs tabular-nums text-sidebar-muted-foreground group-hover/project-folder:invisible group-has-[[data-sidebar-action-for]:focus]/project-folder:invisible pointer-coarse:invisible">
+          <span
+            className={cn(
+              "shrink-0 text-xs tabular-nums text-sidebar-muted-foreground",
+              HIDDEN_UNDER_ACTIONS,
+            )}
+          >
             {hiddenThreads.length}
           </span>
+        ) : null}
+        {/* Matches the mark on a pinned thread; the hover actions offer Unpin in its place. */}
+        {group.pinned ? (
+          <PinIcon
+            aria-label={gt("Pinned")}
+            role="img"
+            className={cn(
+              "size-3 shrink-0 text-muted-foreground/65",
+              props.onTogglePin && HIDDEN_UNDER_ACTIONS,
+            )}
+          />
         ) : null}
         <ChevronDownIcon
           aria-hidden
@@ -110,8 +156,35 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
           )}
         />
       </button>
-      {/* Sits over the count, which hides on hover or focus, and left of the chevron. */}
-      <span className="absolute inset-y-0 right-6 flex items-center opacity-0 focus-within:opacity-100 group-hover/project-folder:opacity-100 pointer-coarse:opacity-100">
+      {/* Sits over the count and pin mark, which hide on hover or focus, and left of the chevron. */}
+      <span className="absolute inset-y-0 right-6 flex items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover/project-folder:opacity-100 pointer-coarse:opacity-100">
+        {props.onTogglePin ? (
+          <span className="group/pin flex">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    data-sidebar-action-for={rowId}
+                    size="icon-xs"
+                    variant="ghost-muted"
+                    aria-label={group.pinned ? gt("Unpin project") : gt("Pin project")}
+                    onClick={() => props.onTogglePin?.(group)}
+                  />
+                }
+              >
+                {group.pinned ? (
+                  <>
+                    <PinIcon aria-hidden className="group-hover/pin:hidden" />
+                    <PinOffIcon aria-hidden className="hidden group-hover/pin:block" />
+                  </>
+                ) : (
+                  <PinIcon aria-hidden />
+                )}
+              </TooltipTrigger>
+              <TooltipPopup>{group.pinned ? gt("Unpin project") : gt("Pin project")}</TooltipPopup>
+            </Tooltip>
+          </span>
+        ) : null}
         <Tooltip>
           <TooltipTrigger
             render={

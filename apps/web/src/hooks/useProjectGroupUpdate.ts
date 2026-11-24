@@ -6,18 +6,23 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { getProjectOrderKey } from "@t3tools/client-runtime/state/project-grouping";
 import { AsyncResult } from "effect/reactivity";
 import * as Cause from "effect/Cause";
 import { msg } from "gt-react";
 
+import { appendToManualProjectOrder } from "../components/Sidebar.logic";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { m } from "../i18n/messages";
 import type { SidebarProjectGroupMember } from "../sidebarProjectGrouping";
-import { useProjects, useServerConfigs } from "../state/entities";
+import { readProject, readProjects, useProjects, useServerConfigs } from "../state/entities";
 import { readEnvironment } from "../state/environments";
 import { projectEnvironment } from "../state/projects";
 import { readEnvironmentScope, useEnvironmentsWithScope } from "../state/session";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
+import { useUiStateStore } from "../uiStateStore";
+import { getClientSettings } from "./useSettings";
 
 export type ProjectGroupUpdate = Partial<{
   title: string;
@@ -96,6 +101,9 @@ export function useProjectGroupUpdate() {
         return result;
       }
     }
+    if (typeof input !== "function" && input.pinned !== undefined) {
+      appendPinChangeToManualOrder(members);
+    }
     return AsyncResult.success(undefined);
   };
 
@@ -139,6 +147,20 @@ export function useProjectPin() {
     setProjectGroupPinned,
     toggleProjectGroupPin: (group: PinnableGroup) => setProjectGroupPinned(group, !group.pinned),
   };
+}
+
+/**
+ * In manual order, Pin and Unpin put the project last in the group it joins, so the
+ * other projects keep their places. Automatic orders do not read the saved order.
+ */
+function appendPinChangeToManualOrder(members: ReadonlyArray<ProjectGroupMember>) {
+  if (getClientSettings().sidebarProjectSortOrder !== "manual") return;
+  const keys = members.flatMap((member) => {
+    const project = readProject(scopeProjectRef(member.environmentId, member.id));
+    return project === null ? [] : [getProjectOrderKey(project)];
+  });
+  const { projectOrder, setProjectOrder } = useUiStateStore.getState();
+  setProjectOrder(appendToManualProjectOrder(readProjects(), projectOrder, keys));
 }
 
 /** Reports the first member this connection cannot change, and returns that failure. */

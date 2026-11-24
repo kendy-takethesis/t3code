@@ -26,6 +26,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
+import { getProjectOrderKey } from "@t3tools/client-runtime/state/project-grouping";
 import type { AsyncResult } from "effect/reactivity";
 import {
   effectiveSnoozed,
@@ -887,6 +888,118 @@ export function orderItemsByPreferredIds<TItem, TId>(input: {
   });
   const remaining = items.filter((_, index) => !emittedIndexes.has(index));
   return [...ordered, ...remaining];
+}
+
+/** Projects in the saved manual order; projects it does not list follow in their given order. */
+export function orderProjectsByManualOrder<
+  TProject extends { readonly environmentId: EnvironmentId; readonly workspaceRoot: string },
+>(projects: readonly TProject[], projectOrder: readonly string[]): TProject[] {
+  return orderItemsByPreferredIds({
+    items: projects,
+    preferredIds: projectOrder,
+    getId: getProjectOrderKey,
+    getPreferenceIds: (project) => [
+      getProjectOrderKey(project),
+      legacyProjectCwdPreferenceKey(project.workspaceRoot),
+    ],
+  });
+}
+
+/**
+ * The manual order with `keys` moved to its end. Pinned projects show first, so a
+ * project whose pin just changed lands last in the group it joined. Entries for
+ * projects that no longer exist are dropped.
+ */
+export function appendToManualProjectOrder(
+  projects: ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly workspaceRoot: string;
+  }>,
+  projectOrder: readonly string[],
+  keys: readonly string[],
+): string[] {
+  const appended = new Set(keys);
+  const kept = orderProjectsByManualOrder(projects, projectOrder)
+    .map(getProjectOrderKey)
+    .filter((key) => !appended.has(key));
+  return [...new Set([...kept, ...keys])];
+}
+
+export type ProjectFolderPlacement = "before" | "after";
+
+export interface OrderedProjectFolder {
+  readonly projectKey: string;
+  readonly pinned: boolean;
+  readonly archived: boolean;
+}
+
+/**
+ * The shown folders a folder moves past with Move up and Move down: its nearest
+ * neighbours in its own pin group. Archived folders stay below the rest.
+ */
+export function resolveProjectFolderNeighbours(
+  folders: readonly OrderedProjectFolder[],
+  projectKey: string,
+): { readonly above: string | null; readonly below: string | null } {
+  const folder = folders.find((candidate) => candidate.projectKey === projectKey);
+  if (folder === undefined || folder.archived) return { above: null, below: null };
+  const peers = folders.filter(
+    (candidate) => !candidate.archived && candidate.pinned === folder.pinned,
+  );
+  const index = peers.indexOf(folder);
+  return {
+    above: peers[index - 1]?.projectKey ?? null,
+    below: peers[index + 1]?.projectKey ?? null,
+  };
+}
+
+/** Whether a drop changes the shown order without taking a folder out of its pin group. */
+export function canPlaceProjectFolder(
+  folders: readonly OrderedProjectFolder[],
+  movedKey: string,
+  targetKey: string,
+  placement: ProjectFolderPlacement,
+): boolean {
+  const movedIndex = folders.findIndex((folder) => folder.projectKey === movedKey);
+  const targetIndex = folders.findIndex((folder) => folder.projectKey === targetKey);
+  const moved = folders[movedIndex];
+  const target = folders[targetIndex];
+  if (
+    moved === undefined ||
+    target === undefined ||
+    moved === target ||
+    moved.archived ||
+    target.archived ||
+    moved.pinned !== target.pinned
+  ) {
+    return false;
+  }
+  return movedIndex !== targetIndex + (placement === "before" ? -1 : 1);
+}
+
+/**
+ * The saved manual order after placing one project group before or after another.
+ * `groups` lists every group in sidebar order, including those without a folder,
+ * so their places survive. A group's checkouts move together.
+ */
+export function placeProjectGroupInOrder(
+  groups: ReadonlyArray<{
+    readonly projectKey: string;
+    readonly memberProjects: ReadonlyArray<{ readonly physicalProjectKey: string }>;
+  }>,
+  movedKey: string,
+  targetKey: string,
+  placement: ProjectFolderPlacement,
+): string[] {
+  const moved = groups.find((group) => group.projectKey === movedKey);
+  const rest = groups.filter((group) => group !== moved);
+  const targetIndex = rest.findIndex((group) => group.projectKey === targetKey);
+  const insertAt = targetIndex + (placement === "after" ? 1 : 0);
+  const placed =
+    moved === undefined || targetIndex < 0
+      ? groups
+      : [...rest.slice(0, insertAt), moved, ...rest.slice(insertAt)];
+  return placed.flatMap((group) => group.memberProjects.map((member) => member.physicalProjectKey));
 }
 
 export function resolveAdjacentThreadId<T>(input: {

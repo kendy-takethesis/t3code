@@ -137,7 +137,7 @@ import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
-import { useClientSettings } from "../hooks/useSettings";
+import { getClientSettings, updateClientSettings, useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
@@ -194,8 +194,10 @@ import {
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
+  placeProjectGroupInOrder,
   planSidebarThreadDrop,
   reduceSidebarProjectScopeMenuState,
+  resolveProjectFolderNeighbours,
   resolveAdjacentThreadId,
   resolveSidebarSweepKeys,
   resolveSidebarDropTarget,
@@ -215,6 +217,7 @@ import {
   useSnoozeWakeClock,
   threadShortcutContext,
   useThreadJumpHintsVisible,
+  type ProjectFolderPlacement,
   type SidebarListItem,
   type SidebarSection,
 } from "./Sidebar.logic";
@@ -283,6 +286,7 @@ import {
   SidebarProjectFolderHeader,
   sidebarFolderRowId,
 } from "./sidebar/SidebarProjectFolderHeader";
+import { useProjectFolderDrag } from "./sidebar/useProjectFolderDrag";
 import {
   SidebarDragBoundary,
   SidebarSectionHeader,
@@ -341,6 +345,7 @@ const sidebarProviderEntriesAtom = Atom.make((get) => {
 const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, SidebarProviderEntry> = new Map();
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
 const EMPTY_DRAFT_IDS: readonly DraftId[] = [];
+const EMPTY_PROJECT_GROUPS: readonly SidebarProjectSnapshot[] = [];
 
 const SETTLED_TAIL_INITIAL_COUNT = 10;
 const SETTLED_TAIL_PAGE_COUNT = 25;
@@ -1098,6 +1103,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   // loaded. The stored keys are left alone, so the scope returns with its project.
   // An archived project's scope reads as all projects, matching the menu.
   const scopeGroups = pickableProjectGroups(projectGroups);
+  // An archived project keeps a folder for its active threads, below the rest.
+  const orderedProjectGroups = [
+    ...scopeGroups,
+    ...projectGroups.filter((project) => project.archived),
+  ];
   const archivedProjectKeys = new Set(
     projectGroups.filter((project) => project.archived).map((project) => project.projectKey),
   );
@@ -1278,53 +1288,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const target = entry?.targetProject ?? group;
     void handleNewThread(scopeProjectRef(target.environmentId, target.id));
   });
-  const handleProjectFolderContextMenu = useStableCallback(
-    (
-      group: SidebarProjectSnapshot,
-      position: { x: number; y: number },
-      source: ContextMenuSource,
-    ) => {
-      const api = readLocalApi();
-      if (!api) return;
-      void (async () => {
-        const clicked = await settlePromise(() =>
-          api.contextMenu.show(
-            [
-              { id: "new-thread", label: gt("New thread") },
-              { id: "copy-path", label: gt("Copy path") },
-              ...(canPinProject(group)
-                ? [
-                    group.pinned
-                      ? { id: "unpin", label: gt("Unpin project"), icon: "pin-off" }
-                      : { id: "pin", label: gt("Pin project"), icon: "pin" },
-                  ]
-                : []),
-              { id: "project-settings", label: gt("Project settings"), icon: "settings" },
-            ],
-            position,
-            source,
-          ),
-        );
-        if (clicked._tag === "Failure") return;
-        switch (clicked.value) {
-          case "new-thread":
-            startThreadInProjectFolder(group);
-            return;
-          case "copy-path":
-            copyPathToClipboard(group.workspaceRoot, { path: group.workspaceRoot });
-            return;
-          case "pin":
-          case "unpin":
-            setProjectGroupPinned(group, clicked.value === "pin");
-            return;
-          case "project-settings":
-            openProjectSettings(group);
-            return;
-        }
-      })();
-    },
-  );
-
   const {
     workingShelfEnabled,
     pinnedThreads,
@@ -1373,13 +1336,103 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     departingThreadKey,
     folderGroups: boringSidebarEnabled
       ? scopedProjectGroups.length === 0
-        ? // An archived project keeps a folder for its active threads, below the rest.
-          [...scopeGroups, ...projectGroups.filter((project) => project.archived)]
+        ? orderedProjectGroups
         : scopedProjectGroups
       : null,
     keepEmptyFolders: (group) =>
       scopedProjectGroups.length > 0 || (group.pinned && !group.archived),
   });
+  const setProjectOrder = useUiStateStore((store) => store.setProjectOrder);
+  // Saves every project in its shown place, so the first move starts Manual from the
+  // order on screen and projects without a folder keep their places.
+  const placeProjectFolder = useStableCallback(
+    (movedKey: string, targetKey: string, placement: ProjectFolderPlacement) => {
+      setProjectOrder(
+        placeProjectGroupInOrder(orderedProjectGroups, movedKey, targetKey, placement),
+      );
+      if (getClientSettings().sidebarProjectSortOrder !== "manual") {
+        void updateClientSettings({ sidebarProjectSortOrder: "manual" });
+      }
+    },
+  );
+  const shownFolderGroups = projectFolders?.map((folder) => folder.group) ?? EMPTY_PROJECT_GROUPS;
+  const folderDrag = useProjectFolderDrag({
+    folders: shownFolderGroups,
+    onPlace: placeProjectFolder,
+  });
+  const draggedFolderGroup =
+    shownFolderGroups.find((group) => group.projectKey === folderDrag.draggingKey) ?? null;
+  const toggleFolderPin = useStableCallback((group: SidebarProjectSnapshot) =>
+    toggleProjectGroupPin(group),
+  );
+  const handleProjectFolderContextMenu = useStableCallback(
+    (
+      group: SidebarProjectSnapshot,
+      position: { x: number; y: number },
+      source: ContextMenuSource,
+    ) => {
+      const api = readLocalApi();
+      if (!api) return;
+      const neighbours = resolveProjectFolderNeighbours(shownFolderGroups, group.projectKey);
+      void (async () => {
+        const clicked = await settlePromise(() =>
+          api.contextMenu.show(
+            [
+              { id: "new-thread", label: gt("New thread") },
+              { id: "copy-path", label: gt("Copy path") },
+              ...(canPinProject(group)
+                ? [
+                    group.pinned
+                      ? { id: "unpin", label: gt("Unpin project"), icon: "pin-off" }
+                      : { id: "pin", label: gt("Pin project"), icon: "pin" },
+                  ]
+                : []),
+              // An archived folder stays below the rest, so it has no place to move to.
+              ...(group.archived
+                ? []
+                : [
+                    { id: "move-up", label: gt("Move up"), disabled: neighbours.above === null },
+                    {
+                      id: "move-down",
+                      label: gt("Move down"),
+                      disabled: neighbours.below === null,
+                    },
+                  ]),
+              { id: "project-settings", label: gt("Project settings"), icon: "settings" },
+            ],
+            position,
+            source,
+          ),
+        );
+        if (clicked._tag === "Failure") return;
+        switch (clicked.value) {
+          case "new-thread":
+            startThreadInProjectFolder(group);
+            return;
+          case "copy-path":
+            copyPathToClipboard(group.workspaceRoot, { path: group.workspaceRoot });
+            return;
+          case "pin":
+          case "unpin":
+            setProjectGroupPinned(group, clicked.value === "pin");
+            return;
+          case "move-up":
+            if (neighbours.above !== null) {
+              placeProjectFolder(group.projectKey, neighbours.above, "before");
+            }
+            return;
+          case "move-down":
+            if (neighbours.below !== null) {
+              placeProjectFolder(group.projectKey, neighbours.below, "after");
+            }
+            return;
+          case "project-settings":
+            openProjectSettings(group);
+            return;
+        }
+      })();
+    },
+  );
 
   // Ranked across environments as the palette ranks them, so one
   // environment's list does not sit above another's better matches; rows
@@ -3475,6 +3528,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 <SortableContext items={sortableIds} strategy={sidebarSortingStrategy}>
                   <ul
                     ref={attachTreeRef}
+                    {...folderDrag.listDropProps}
                     // Presentation flattens VoiceOver's list interaction boundary while preserving descendant
                     // controls.
                     role="presentation"
@@ -3631,16 +3685,48 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           continue;
                         }
                         if (projectFolders !== null && item.marker === "active-placeholder") {
+                          let previousFolderPinned: boolean | null = null;
                           for (const folder of projectFolders) {
+                            const { pinned, archived } = folder.group;
+                            // A dragged folder stays in its pin group, so both groups are named while it moves.
+                            const startsGroup =
+                              draggedFolderGroup !== null &&
+                              !archived &&
+                              pinned !== previousFolderPinned;
+                            previousFolderPinned = archived ? previousFolderPinned : pinned;
                             items.push(
                               <SidebarProjectFolderHeader
                                 key={`project-folder:${folder.group.projectKey}`}
                                 group={folder.group}
                                 collapsed={folder.collapsed}
                                 hiddenThreads={folder.hiddenThreads}
+                                dragging={folderDrag.draggingKey === folder.group.projectKey}
+                                groupLabel={
+                                  startsGroup
+                                    ? {
+                                        label: pinned
+                                          ? gt("Pinned", { $context: "sidebar section" })
+                                          : gt("Projects"),
+                                        highlighted: pinned === draggedFolderGroup?.pinned,
+                                      }
+                                    : null
+                                }
+                                dimmed={
+                                  draggedFolderGroup !== null &&
+                                  (archived || pinned !== draggedFolderGroup.pinned)
+                                }
                                 onToggle={toggleProjectFolder}
+                                onTogglePin={
+                                  canPinProject(folder.group) ? toggleFolderPin : undefined
+                                }
                                 onNewThread={startThreadInProjectFolder}
                                 onContextMenu={handleProjectFolderContextMenu}
+                                onDragStart={
+                                  folderDrag.canDrag(folder.group.projectKey)
+                                    ? folderDrag.onFolderDragStart
+                                    : undefined
+                                }
+                                onDragEnd={folderDrag.onFolderDragEnd}
                               />,
                             );
                             for (const thread of folder.threads) {
@@ -3795,6 +3881,14 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 )}
                         </button>
                       </li>
+                    ) : null}
+                    {folderDrag.dropLineTop !== null ? (
+                      <li
+                        aria-hidden
+                        data-testid="sidebar-project-drop-line"
+                        className="pointer-events-none absolute inset-x-1 z-10 h-0.5 -translate-y-1/2 list-none rounded-full bg-primary"
+                        style={{ top: folderDrag.dropLineTop }}
+                      />
                     ) : null}
                   </ul>
                 </SortableContext>
